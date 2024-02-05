@@ -11,6 +11,15 @@ from torch import nn as nn
 from torch.nn.modules.container import Sequential
 from torch.nn.modules.conv import Conv2d
 
+view_input = False
+
+if view_input:
+    import numpy as np
+    import matplotlib
+    matplotlib.use('TkAgg')
+    import matplotlib.pyplot as plt
+
+    num_envs = 2
 
 def conv3x3(
     in_planes: int, out_planes: int, stride: int = 1, groups: int = 1
@@ -204,6 +213,7 @@ class ResNet(nn.Module):
         cardinality: int = 1,
     ) -> None:
         super(ResNet, self).__init__()
+
         self.conv1 = nn.Sequential(
             nn.Conv2d(
                 in_channels,
@@ -236,6 +246,23 @@ class ResNet(nn.Module):
 
         self.final_channels = self.inplanes
         self.final_spatial_compress = 1.0 / (2**5)
+
+        if view_input:
+            self.fig, self.ax = plt.subplots(3, num_envs)
+            for i in range(num_envs):
+                self.ax[0][i].imshow(np.ones((120, 114), dtype=float), cmap='gray', interpolation='none')
+                self.ax[1][i].imshow(np.ones((120, 114), dtype=float), cmap='gray', interpolation='none')
+                self.ax[2][i].imshow(np.ones((120, 114), dtype=float), cmap='gray', interpolation='none')
+
+            self.plotfig = plt.show(block=False)
+
+    def update_plot(self, tensor):
+        for i in range(num_envs):
+            self.ax[0][i].imshow(tensor[i][0] * 1000, cmap='gray', interpolation='none')
+            self.ax[1][i].imshow(tensor[i][1] * 1000, cmap='gray', interpolation='none')
+            self.ax[2][i].imshow(tensor[i][2] * 1000, cmap='gray', interpolation='none')
+        plt.draw()
+        plt.pause(0.01)  # Pause briefly to allow the plot to be updated
 
     def _make_layer(
         self,
@@ -270,6 +297,10 @@ class ResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x) -> Tensor:
+
+        if view_input:
+            self.update_plot(x.cpu())
+
         x = self.conv1(x)
         x = self.maxpool(x)
         x = cast(Tensor, x)
