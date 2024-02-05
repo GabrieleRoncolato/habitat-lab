@@ -33,6 +33,7 @@ from habitat_baselines.rl.ddppo.policy.running_mean_and_var import (
     RunningMeanAndVar,
 )
 from habitat_baselines.rl.ddppo.policy.deit import (deit_tiny_distilled_patch16_224)
+from habitat_baselines.rl.ddppo.policy.vit import (simple_vit)
 from habitat_baselines.rl.models.rnn_state_encoder import (
     build_rnn_state_encoder,
 )
@@ -239,6 +240,88 @@ class DeiTEncoder(nn.Module):
             deit_input.append(obs_k)
 
         x = torch.cat(deit_input, dim=1)
+        x = F.avg_pool2d(x, 2)
+
+        x = self.running_mean_and_var(x)
+        x = self.backbone(x)
+        return x
+
+
+class ViTEncoder(nn.Module):
+    def __init__(
+        self,
+        observation_space: spaces.Dict,
+        normalize_visual_inputs: bool = False,
+    ):
+        super().__init__()
+
+        # Determine which visual observations are present
+        self.visual_keys = [
+            k
+            for k, v in observation_space.spaces.items()
+            if len(v.shape) > 1 and k != ImageGoalSensor.cls_uuid
+        ]
+        self.key_needs_rescaling = {k: None for k in self.visual_keys}
+        for k, v in observation_space.spaces.items():
+            if v.dtype == np.uint8:
+                self.key_needs_rescaling[k] = 1.0 / v.high.max()
+
+        # Count total # of channels
+        self._n_input_channels = sum(
+            observation_space.spaces[k].shape[2] for k in self.visual_keys
+        )
+
+        if normalize_visual_inputs:
+            self.running_mean_and_var: nn.Module = RunningMeanAndVar(
+                self._n_input_channels
+            )
+        else:
+            self.running_mean_and_var = nn.Sequential()
+
+        if not self.is_blind:
+            spatial_size_h = (
+                observation_space.spaces[self.visual_keys[0]].shape[0] // 2
+            )
+            spatial_size_w = (
+                observation_space.spaces[self.visual_keys[0]].shape[1] // 2
+            )
+            self.backbone = simple_vit(
+                img_size=(spatial_size_h, spatial_size_w), patch_size=(8, 6), embed_dim=192
+            )
+
+            self.output_shape = (
+                192
+            )
+
+    @property
+    def is_blind(self):
+        return self._n_input_channels == 0
+
+    def layer_init(self):
+        for layer in self.modules():
+            if isinstance(layer, (nn.Conv2d, nn.Linear)):
+                nn.init.kaiming_normal_(
+                    layer.weight, nn.init.calculate_gain("relu")
+                )
+                if layer.bias is not None:
+                    nn.init.constant_(layer.bias, val=0)
+
+    def forward(self, observations: Dict[str, torch.Tensor]) -> torch.Tensor:  # type: ignore
+        if self.is_blind:
+            return None
+
+        vit_input = []
+        for k in self.visual_keys:
+            obs_k = observations[k]
+            # permute tensor to dimension [BATCH x CHANNEL x HEIGHT X WIDTH]
+            obs_k = obs_k.permute(0, 3, 1, 2)
+            if self.key_needs_rescaling[k] is not None:
+                obs_k = (
+                    obs_k.float() * self.key_needs_rescaling[k]
+                )  # normalize
+            vit_input.append(obs_k)
+
+        x = torch.cat(vit_input, dim=1)
         x = F.avg_pool2d(x, 2)
 
         x = self.running_mean_and_var(x)
@@ -661,6 +744,7 @@ class PointNavResNetNet(Net):
                     nn.ReLU(True),
                 )
         else:
+            '''
             self.visual_encoder = ResNetEncoder(
                 use_obs_space,
                 baseplanes=resnet_baseplanes,
@@ -668,6 +752,7 @@ class PointNavResNetNet(Net):
                 make_backbone=getattr(resnet, backbone),
                 normalize_visual_inputs=normalize_visual_inputs,
             )
+            '''
 
             '''
             self.visual_encoder = DeiTEncoder(
@@ -675,6 +760,11 @@ class PointNavResNetNet(Net):
                 normalize_visual_inputs=normalize_visual_inputs
             )
             '''
+
+            self.visual_encoder = ViTEncoder(
+                use_obs_space,
+                normalize_visual_inputs=normalize_visual_inputs
+            )
 
             if not self.visual_encoder.is_blind:
                 self.visual_fc = nn.Sequential(
