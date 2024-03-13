@@ -302,7 +302,7 @@ class PPOConfig(HabitatBaselinesBaseConfig):
     tau: float = 0.95
     reward_window_size: int = 50
     use_normalized_advantage: bool = False
-    hidden_size: int = 512
+    hidden_size: int = 256
     entropy_target_factor: float = 0.0
     use_adaptive_entropy_pen: bool = False
     use_clipped_value_loss: bool = True

@@ -66,6 +66,8 @@ from habitat_baselines.utils.info_dict import (
 )
 from habitat_baselines.utils.timing import g_timer
 
+import wandb
+
 
 @baseline_registry.register_trainer(name="ddppo")
 @baseline_registry.register_trainer(name="ppo")
@@ -570,6 +572,22 @@ class PPOTrainer(BaseRLTrainer):
         }
         deltas["count"] = max(deltas["count"], 1.0)
 
+        non_averaged_reward = {
+            (v[-1] - v[0])
+            if len(v) > 1
+            else v[0]
+            for k, v in self.window_episode_stats.items()
+        }
+
+        non_averaged_deltas = {
+            k: (
+                (v[-1] - v[0])
+                if len(v) > 1
+                else v[0]
+            )
+            for k, v in self.window_episode_stats.items()
+        }
+
         writer.add_scalar(
             "reward",
             deltas["reward"] / deltas["count"],
@@ -604,11 +622,14 @@ class PPOTrainer(BaseRLTrainer):
                 self.num_steps_done,
             )
 
+        logger.info("\n\nBefore: " + str(torch.distributed.get_rank()))
         # log stats
         if (
             self.num_updates_done % self.config.habitat_baselines.log_interval
             == 0
         ):
+            logger.info("After: " + str(torch.distributed.get_rank()))
+            logger.info("\n\n")
             logger.info(
                 "update: {}\tfps: {:.3f}\t".format(
                     self.num_updates_done,
@@ -634,9 +655,29 @@ class PPOTrainer(BaseRLTrainer):
                 [f"{k}: {v.mean:.3f}" for k, v in g_timer.items()]
             )
             logger.info(f"\tPerf Stats: {perf_stats_str}")
+            loss_test_str = " ".join(
+                [f"{k}: {v}" for k, v in losses.items()]
+            )
+            logger.info(f"\tLoss test: {loss_test_str}")
             if self.config.habitat_baselines.should_log_single_proc_infos:
                 for k, v in self._single_proc_infos.items():
                     logger.info(f" - {k}: {np.mean(v):.3f}")
+
+            wandb_metrics = {
+              "Success": deltas["social_nav_stats.has_found_human"] / deltas["count"],
+              "Success WBPS": deltas["social_nav_stats.found_human_rate_over_epi"] / deltas["count"],
+              "Following rate": deltas["social_nav_stats.found_human_rate_after_encounter_over_epi"] / deltas["count"],
+              "Collision rate": deltas["num_agents_collide"] / deltas["count"],
+              "Avg distance": deltas["social_nav_stats.avg_robot_to_human_dis_over_epi"] / deltas["count"],
+              "Reward": deltas["reward"] / deltas["count"],
+              "Value loss": losses["agent_0_value_loss"],
+              "Action loss": losses["agent_0_action_loss"]
+            }
+
+            for env, reward in enumerate(non_averaged_deltas["reward"]):
+                wandb_metrics[f"Reward {env}"] = reward
+
+            wandb.log(wandb_metrics)
 
     def should_end_early(self, rollout_step) -> bool:
         if not self._is_distributed:

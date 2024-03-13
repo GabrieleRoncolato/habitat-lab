@@ -95,6 +95,9 @@ data
 /videos
 /train_dir
 /tb
+/tb_social_nav
+/checkpoints_social_nav
+/checkpoints_social_nav_resnet
 
 # outputs from other libraries
 /sandbox

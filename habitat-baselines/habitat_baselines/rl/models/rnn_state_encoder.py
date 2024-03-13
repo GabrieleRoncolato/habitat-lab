@@ -443,3 +443,4 @@ def build_rnn_state_encoder(
         return LSTMStateEncoder(input_size, hidden_size, num_layers)
     else:
         raise RuntimeError(f"Did not recognize rnn type '{rnn_type}'")
+
