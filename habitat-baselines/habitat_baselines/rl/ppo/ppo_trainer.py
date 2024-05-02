@@ -291,6 +291,18 @@ class PPOTrainer(BaseRLTrainer):
             lambda: deque(maxlen=self._ppo_cfg.reward_window_size)
         )
 
+        if rank0_only():
+            wandb.init(
+              name="Custom resnet training with rl=2.5e-4",
+              project="Habitat-Robustness",
+              entity="lmarza-gronco",
+              mode="online",
+              save_code=False,
+              config=None,
+              id="CustomResnetTraining3",
+              resume=resume_state is not None
+            )
+
         self.t_start = time.time()
 
     @rank0_only
@@ -572,13 +584,6 @@ class PPOTrainer(BaseRLTrainer):
         }
         deltas["count"] = max(deltas["count"], 1.0)
 
-        non_averaged_reward = {
-            (v[-1] - v[0])
-            if len(v) > 1
-            else v[0]
-            for k, v in self.window_episode_stats.items()
-        }
-
         non_averaged_deltas = {
             k: (
                 (v[-1] - v[0])
@@ -622,14 +627,11 @@ class PPOTrainer(BaseRLTrainer):
                 self.num_steps_done,
             )
 
-        logger.info("\n\nBefore: " + str(torch.distributed.get_rank()))
         # log stats
         if (
             self.num_updates_done % self.config.habitat_baselines.log_interval
             == 0
         ):
-            logger.info("After: " + str(torch.distributed.get_rank()))
-            logger.info("\n\n")
             logger.info(
                 "update: {}\tfps: {:.3f}\t".format(
                     self.num_updates_done,
@@ -658,7 +660,6 @@ class PPOTrainer(BaseRLTrainer):
             loss_test_str = " ".join(
                 [f"{k}: {v}" for k, v in losses.items()]
             )
-            logger.info(f"\tLoss test: {loss_test_str}")
             if self.config.habitat_baselines.should_log_single_proc_infos:
                 for k, v in self._single_proc_infos.items():
                     logger.info(f" - {k}: {np.mean(v):.3f}")
@@ -675,9 +676,15 @@ class PPOTrainer(BaseRLTrainer):
             }
 
             for env, reward in enumerate(non_averaged_deltas["reward"]):
-                wandb_metrics[f"Reward {env}"] = reward
+                wandb_metrics[f"Reward {env}"] = reward.item() / deltas["count"]
 
-            wandb.log(wandb_metrics)
+            for env, success in enumerate(non_averaged_deltas["social_nav_stats.has_found_human"]):
+                wandb_metrics[f"Success {env}"] = success.item() / deltas["count"]
+
+            for env, collision in enumerate(non_averaged_deltas["num_agents_collide"]):
+                wandb_metrics[f"Collision rate {env}"] = collision.item() / deltas["count"]
+
+            wandb.log(wandb_metrics, step=self.num_steps_done)
 
     def should_end_early(self, rollout_step) -> bool:
         if not self._is_distributed:

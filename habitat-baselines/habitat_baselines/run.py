@@ -20,8 +20,6 @@ from habitat_baselines.config.default_structured_configs import (
 if TYPE_CHECKING:
     from omegaconf import DictConfig
 
-import wandb
-
 @hydra.main(
     version_base=None,
     config_path="config",
@@ -41,15 +39,6 @@ def execute_exp(config: "DictConfig", run_type: str) -> None:
     random.seed(config.habitat.seed)
     np.random.seed(config.habitat.seed)
     torch.manual_seed(config.habitat.seed)
-
-    wandb.init(
-      name="Base resnet training",
-      project="Habitat-Robustness",
-      entity="lmarza-gronco",
-      mode="online",
-      save_code=False,
-      config=None
-    )
 
     if (
         config.habitat_baselines.force_torch_single_threaded

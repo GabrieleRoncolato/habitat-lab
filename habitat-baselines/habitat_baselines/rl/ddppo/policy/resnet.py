@@ -11,62 +11,51 @@ from torch import nn as nn
 from torch.nn.modules.container import Sequential
 from torch.nn.modules.conv import Conv2d
 
-
-def conv3x3(
-    in_planes: int, out_planes: int, stride: int = 1, groups: int = 1
-) -> Conv2d:
-    """3x3 convolution with padding"""
-    return nn.Conv2d(
-        in_planes,
-        out_planes,
-        kernel_size=3,
-        stride=stride,
-        padding=1,
-        bias=False,
-        groups=groups,
-    )
-
-
-def conv1x1(in_planes: int, out_planes: int, stride: int = 1) -> Conv2d:
-    """1x1 convolution"""
-    return nn.Conv2d(
-        in_planes, out_planes, kernel_size=1, stride=stride, bias=False
-    )
-
+import torch.nn.functional as F
 
 class BasicBlock(nn.Module):
-    expansion = 1
-    resneXt = False
 
     def __init__(
         self,
-        inplanes,
+        in_planes,
         planes,
-        ngroups,
-        stride=1,
-        downsample=None,
-        cardinality=1,
+        shortcut,
+        stride=1
     ):
         super(BasicBlock, self).__init__()
-        self.convs = nn.Sequential(
-            conv3x3(inplanes, planes, stride, groups=cardinality),
-            nn.GroupNorm(ngroups, planes),
-            nn.ReLU(True),
-            conv3x3(planes, planes, groups=cardinality),
-            nn.GroupNorm(ngroups, planes),
+        self.conv1 = nn.Conv2d(
+            in_planes,
+            planes,
+            kernel_size=3,
+            stride=stride,
+            padding=1,
+            bias=False
         )
-        self.downsample = downsample
-        self.relu = nn.ReLU(True)
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.conv2 = nn.Conv2d(
+            planes,
+            planes,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            bias=False
+        )
+        self.bn2 = nn.BatchNorm2d(planes)
+
+        if shortcut:
+            self.shortcut = nn.Sequential(
+              nn.Conv2d(in_planes, planes, kernel_size=1, stride=stride, bias=False),
+              nn.BatchNorm2d(planes)
+            )
+        else:
+            self.shortcut = nn.Sequential()
 
     def forward(self, x):
-        residual = x
-
-        out = self.convs(x)
-
-        if self.downsample is not None:
-            residual = self.downsample(x)
-
-        return self.relu(out + residual)
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += self.shortcut(x)
+        out = F.relu(out)
+        return out
 
 
 def _build_bottleneck_branch(
@@ -196,83 +185,53 @@ Block = Union[Type[Bottleneck], Type[BasicBlock]]
 class ResNet(nn.Module):
     def __init__(
         self,
-        in_channels: int,
-        base_planes: int,
-        ngroups: int,
-        block: Block,
-        layers: List[int],
-        cardinality: int = 1,
+        block,
+        num_blocks,
+        in_channels,
+        in_planes=32
     ) -> None:
         super(ResNet, self).__init__()
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(
-                in_channels,
-                base_planes,
-                kernel_size=7,
-                stride=2,
-                padding=3,
-                bias=False,
-            ),
-            nn.GroupNorm(ngroups, base_planes),
-            nn.ReLU(True),
-        )
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.cardinality = cardinality
 
-        self.inplanes = base_planes
-        if block.resneXt:
-            base_planes *= 2
+        self.in_planes = in_planes
 
-        self.layer1 = self._make_layer(block, ngroups, base_planes, layers[0])
-        self.layer2 = self._make_layer(
-            block, ngroups, base_planes * 2, layers[1], stride=2
-        )
-        self.layer3 = self._make_layer(
-            block, ngroups, base_planes * 2 * 2, layers[2], stride=2
-        )
-        self.layer4 = self._make_layer(
-            block, ngroups, base_planes * 2 * 2 * 2, layers[3], stride=2
-        )
+        self.conv1 = nn.Conv2d(in_channels, in_planes, kernel_size=7, stride=2, padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(in_planes)
 
-        self.final_channels = self.inplanes
+        self.layer1 = self._make_layer(block, in_planes, num_blocks[0], stride=1)
+        self.layer2 = self._make_layer(block, in_planes * 2, num_blocks[1], stride=2)
+        self.layer3 = self._make_layer(block, in_planes * 4, num_blocks[2], stride=2)
+        self.layer4 = self._make_layer(block, in_planes * 8, num_blocks[3], stride=2)
+
+        self.final_channels = self.in_planes
         self.final_spatial_compress = 1.0 / (2**5)
 
     def _make_layer(
         self,
-        block: Block,
-        ngroups: int,
-        planes: int,
-        blocks: int,
-        stride: int = 1,
+        block,
+        planes,
+        num_blocks,
+        stride,
     ) -> Sequential:
-        downsample = None
-        if stride != 1 or self.inplanes != planes * block.expansion:
-            downsample = nn.Sequential(
-                conv1x1(self.inplanes, planes * block.expansion, stride),
-                nn.GroupNorm(ngroups, planes * block.expansion),
-            )
+        shortcut = stride != 1 or self.in_planes != planes
 
         layers = []
         layers.append(
             block(
-                self.inplanes,
+                self.in_planes,
                 planes,
-                ngroups,
-                stride,
-                downsample,
-                cardinality=self.cardinality,
+                shortcut,
+                stride
             )
         )
-        self.inplanes = planes * block.expansion
-        for _i in range(1, blocks):
-            layers.append(block(self.inplanes, planes, ngroups))
+        self.in_planes = planes
+        for _i in range(1, num_blocks):
+            layers.append(block(self.in_planes, planes, False, 1))
 
         return nn.Sequential(*layers)
 
     def forward(self, x) -> Tensor:
-        x = self.conv1(x)
-        x = self.maxpool(x)
-        x = cast(Tensor, x)
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.avg_pool2d(x, 3, 3)
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
@@ -282,7 +241,7 @@ class ResNet(nn.Module):
 
 
 def resnet18(in_channels, base_planes, ngroups):
-    model = ResNet(in_channels, base_planes, ngroups, BasicBlock, [2, 2, 2, 2])
+    model = ResNet(BasicBlock, [2, 2, 2, 2], in_channels, base_planes)
 
     return model
 
