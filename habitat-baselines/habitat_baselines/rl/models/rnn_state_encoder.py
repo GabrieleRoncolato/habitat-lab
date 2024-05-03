@@ -312,6 +312,8 @@ class RNNStateEncoder(nn.Module):
         )
         hidden_states = self.pack_hidden(hidden_states)
 
+        print(hidden_states.shape)
+
         x = x.squeeze(0)
         return x, hidden_states
 
