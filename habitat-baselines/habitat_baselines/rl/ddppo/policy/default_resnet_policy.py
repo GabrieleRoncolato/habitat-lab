@@ -32,7 +32,6 @@ from habitat_baselines.rl.ddppo.policy import resnet
 from habitat_baselines.rl.ddppo.policy.running_mean_and_var import (
     RunningMeanAndVar,
 )
-from habitat_baselines.rl.ddppo.policy.vit import (simple_vit)
 from habitat_baselines.rl.models.rnn_state_encoder import (
     build_rnn_state_encoder,
 )
@@ -57,7 +56,7 @@ class PointNavResNetPolicy(NetPolicy):
         hidden_size: int = 512,
         num_recurrent_layers: int = 1,
         rnn_type: str = "GRU",
-        resnet_baseplanes: int = 16,
+        resnet_baseplanes: int = 32,
         backbone: str = "resnet18",
         normalize_visual_inputs: bool = False,
         force_blind_policy: bool = False,
@@ -71,7 +70,7 @@ class PointNavResNetPolicy(NetPolicy):
         rnn_type: RNN layer type; one of ["GRU", "LSTM"]
         backbone: Visual encoder backbone; one of ["resnet18", "resnet50", "resneXt50", "se_resnet50", "se_resneXt50", "se_resneXt101", "resnet50_clip_avgpool", "resnet50_clip_attnpool"]
         """
-        print(str(resnet_baseplanes))
+
         assert backbone in [
             "resnet18",
             "resnet50",
@@ -163,11 +162,14 @@ class PointNavResNetPolicy(NetPolicy):
         )
 
 
-class ViTEncoder(nn.Module):
+class ResNetEncoder(nn.Module):
     def __init__(
         self,
         observation_space: spaces.Dict,
-        hidden_size=256,
+        baseplanes: int = 32,
+        ngroups: int = 32,
+        spatial_size: int = 128,
+        make_backbone=None,
         normalize_visual_inputs: bool = False,
     ):
         super().__init__()
@@ -202,90 +204,6 @@ class ViTEncoder(nn.Module):
             spatial_size_w = (
                 observation_space.spaces[self.visual_keys[0]].shape[1] // 2
             )
-            self.backbone = simple_vit(
-                img_size=(spatial_size_h, spatial_size_w),
-                patch_size=(8, 6), embed_dim=hidden_size
-            )
-
-    @property
-    def is_blind(self):
-        return self._n_input_channels == 0
-
-    def layer_init(self):
-        for layer in self.modules():
-            if isinstance(layer, (nn.Conv2d, nn.Linear)):
-                nn.init.kaiming_normal_(
-                    layer.weight, nn.init.calculate_gain("relu")
-                )
-                if layer.bias is not None:
-                    nn.init.constant_(layer.bias, val=0)
-
-    def forward(self, observations: Dict[str, torch.Tensor]) -> torch.Tensor:  # type: ignore
-        if self.is_blind:
-            return None
-
-        vit_input = []
-        for k in self.visual_keys:
-            obs_k = observations[k]
-            # permute tensor to dimension [BATCH x CHANNEL x HEIGHT X WIDTH]
-            obs_k = obs_k.permute(0, 3, 1, 2)
-            if self.key_needs_rescaling[k] is not None:
-                obs_k = (
-                    obs_k.float() * self.key_needs_rescaling[k]
-                )  # normalize
-            vit_input.append(obs_k)
-
-        x = torch.cat(vit_input, dim=1)
-        x = F.avg_pool2d(x, 2)
-
-        x = self.running_mean_and_var(x)
-        x = self.backbone(x)
-        
-        return x
-
-
-class ResNetEncoder(nn.Module):
-    def __init__(
-        self,
-        observation_space: spaces.Dict,
-        baseplanes: int = 16,
-        ngroups: int = 32,
-        spatial_size: int = 128,
-        make_backbone=None,
-        normalize_visual_inputs: bool = False,
-    ):
-        super().__init__()
-
-        # Determine which visual observations are present
-        self.visual_keys = [
-            k
-            for k, v in observation_space.spaces.items()
-            if len(v.shape) > 1 and k != ImageGoalSensor.cls_uuid
-        ]
-        self.key_needs_rescaling = {k: None for k in self.visual_keys}
-        for k, v in observation_space.spaces.items():
-            if v.dtype == np.uint8:
-                self.key_needs_rescaling[k] = 1.0 / v.high.max()
-
-        # Count total # of channels
-        self._n_input_channels = sum(
-            observation_space.spaces[k].shape[2] for k in self.visual_keys
-        )
-
-        if normalize_visual_inputs:
-            self.running_mean_and_var: nn.Module = RunningMeanAndVar(
-                self._n_input_channels
-            )
-        else:
-            self.running_mean_and_var = nn.Sequential()
-
-        if not self.is_blind:
-            spatial_size_h = (
-                (observation_space.spaces[self.visual_keys[0]].shape[0] // 2) - 12
-            )
-            spatial_size_w = (
-                observation_space.spaces[self.visual_keys[0]].shape[1] // 2
-            )
             self.backbone = make_backbone(
                 self._n_input_channels, baseplanes, ngroups
             )
@@ -311,7 +229,7 @@ class ResNetEncoder(nn.Module):
                     padding=1,
                     bias=False,
                 ),
-                nn.BatchNorm2d(num_compression_channels),
+                nn.GroupNorm(1, num_compression_channels),
                 nn.ReLU(True),
             )
 
@@ -350,15 +268,11 @@ class ResNetEncoder(nn.Module):
             cnn_input.append(obs_k)
 
         x = torch.cat(cnn_input, dim=1)
-
         x = F.avg_pool2d(x, 2)
 
         x = self.running_mean_and_var(x)
         x = self.backbone(x)
         x = self.compression(x)
-
-        print(x.shape)
-
         return x
 
 
@@ -616,7 +530,7 @@ class PointNavResNetNet(Net):
                 )
                 goal_visual_encoder = ResNetEncoder(
                     goal_observation_space,
-                    baseplanes=16,
+                    baseplanes=resnet_baseplanes,
                     ngroups=resnet_baseplanes // 2,
                     make_backbone=getattr(resnet, backbone),
                     normalize_visual_inputs=normalize_visual_inputs,
@@ -626,7 +540,7 @@ class PointNavResNetNet(Net):
                 goal_visual_fc = nn.Sequential(
                     nn.Flatten(),
                     nn.Linear(
-                        512, hidden_size
+                        np.prod(goal_visual_encoder.output_shape), hidden_size
                     ),
                     nn.ReLU(True),
                 )
@@ -662,7 +576,6 @@ class PointNavResNetNet(Net):
                     nn.ReLU(True),
                 )
         else:
-            '''
             self.visual_encoder = ResNetEncoder(
                 use_obs_space,
                 baseplanes=resnet_baseplanes,
@@ -670,18 +583,12 @@ class PointNavResNetNet(Net):
                 make_backbone=getattr(resnet, backbone),
                 normalize_visual_inputs=normalize_visual_inputs,
             )
-            '''
-            self.visual_encoder = ViTEncoder(
-                use_obs_space,
-                hidden_size=hidden_size,
-                normalize_visual_inputs=normalize_visual_inputs
-            )
 
             if not self.visual_encoder.is_blind:
                 self.visual_fc = nn.Sequential(
                     nn.Flatten(),
                     nn.Linear(
-                        hidden_size, hidden_size
+                        np.prod(self.visual_encoder.output_shape), hidden_size
                     ),
                     nn.ReLU(True),
                 )

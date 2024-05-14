@@ -102,6 +102,8 @@ class SingleAgentAccessMgr(AgentAccessMgr):
                 }
             )
 
+            logger.info("Here 11111111111111111111111111111111111111111111")
+
     @property
     def masks_shape(self) -> Tuple:
         return (1,)

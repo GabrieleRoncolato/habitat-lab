@@ -293,13 +293,13 @@ class PPOTrainer(BaseRLTrainer):
 
         if rank0_only():
             wandb.init(
-              name="Custom resnet training with rl=2.5e-4",
+              name="ViT training with rl=2.5e-4",
               project="Habitat-Robustness",
               entity="lmarza-gronco",
               mode="online",
               save_code=False,
               config=None,
-              id="CustomResnetTraining3",
+              id="ViT Training",
               resume=resume_state is not None
             )
 
