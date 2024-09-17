@@ -81,12 +81,12 @@ class Transformer(nn.Module):
         return self.norm(x)
 
 class NoHeadViT(nn.Module):
-    def __init__(self, *, image_size, patch_size, num_classes, dim, depth, heads, mlp_dim, pool = 'cls', channels = 3, dim_head = 64, dropout = 0., emb_dropout = 0.):
+    def __init__(self, *, image_size, patch_size, num_classes, dim, depth, heads, mlp_dim, pool = 'cls', channels = 3, dropout = 0., emb_dropout = 0.):
         super().__init__()
         image_height, image_width = pair(image_size)
         patch_height, patch_width = pair(patch_size)
 
-        assert image_height % patch_height == 0 and image_width % patch_width == 0, 'Image dimensions must be divisible by the patch size.'
+        assert image_height % patch_height == 0 and image_width % patch_width == 0, f'Image dimensions must be divisible by the patch size. {(image_height, image_width)}, {(patch_height, patch_width)}'
 
         num_patches = (image_height // patch_height) * (image_width // patch_width)
         patch_dim = channels * patch_height * patch_width
@@ -100,42 +100,60 @@ class NoHeadViT(nn.Module):
         )
 
         self.pos_embedding = nn.Parameter(torch.randn(1, num_patches + 1, dim))
-        # self.cls_token = nn.Parameter(torch.randn(1, 1, dim))
+        self.cls_token = nn.Parameter(torch.randn(1, 1, dim))
         self.dropout = nn.Dropout(emb_dropout)
 
-        self.transformer = Transformer(dim, depth, heads, dim_head, mlp_dim, dropout)
+        self.emb_dim = dim
+        self.img_size = image_size
+        self.depth = depth
+        self.heads = heads
+        self.mlp_dim = mlp_dim
+        self.channels = channels
+        self.emb_dropout_vit = dropout
+        self.emb_dropout = emb_dropout
+
+        assert(
+            dim % heads == 0
+        ), "Embedding dimension should be divisible by number of heads"
+
+        self.dim_head = dim // heads
+
+        self.transformer = Transformer(self.emb_dim, self.depth, self.heads, self.dim_head, self.mlp_dim, dropout)
 
         self.pool = pool
-        self.to_latent = nn.Identity()
+        self.to_latent = nn.Linear(in_features=dim, out_features=dim)
 
         # self.mlp_head = nn.Linear(dim, num_classes)
 
+
     def forward(self, img):
         x = self.to_patch_embedding(img)
-        _, n, _ = x.shape
+        b, n, _ = x.shape
 
-        # cls_tokens = repeat(self.cls_token, '1 1 d -> b 1 d', b = b)
-        # x = torch.cat((cls_tokens, x), dim=1)
-        x += self.pos_embedding[:, :n]
+        cls_tokens = repeat(self.cls_token, '1 1 d -> b 1 d', b = b)
+        x = torch.cat((cls_tokens, x), dim=1)
+        x += self.pos_embedding[:, :(n + 1)]
         x = self.dropout(x)
 
         x = self.transformer(x)
 
-        x = x.mean(dim = 1) if self.pool == 'mean' else x[:, 0]
+        x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]
 
         x = self.to_latent(x)
         # return self.mlp_head(x)
         return x
 
-def simple_vit(img_size=(224, 224), patch_size=16, embed_dim=256, **kwargs):
+def simple_vit(img_size=(224, 224), patch_size=(8, 8), embed_dim=512, **kwargs):
     model = NoHeadViT(image_size=img_size,
                       patch_size=patch_size,
                       dim=embed_dim,
                       num_classes=0,
-                      depth=12,
-                      heads=3,
+                      depth=7,
+                      heads=2,
+                      channels=3,
                       mlp_dim=embed_dim,
                       dropout=0.1,
                       emb_dropout=0.1,
                       **kwargs)
     return model
+

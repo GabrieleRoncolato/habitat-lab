@@ -84,6 +84,8 @@ class PPO(nn.Module, Updater):
 
         self.device = next(actor_critic.parameters()).device
 
+        logger.info(f"PPO updater device: {self.device}")
+
         if (
             use_adaptive_entropy_pen
             and hasattr(self.actor_critic, "num_actions")

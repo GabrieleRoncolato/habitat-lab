@@ -20,6 +20,7 @@ from habitat_baselines.config.default_structured_configs import (
 if TYPE_CHECKING:
     from omegaconf import DictConfig
 
+
 @hydra.main(
     version_base=None,
     config_path="config",
@@ -39,7 +40,6 @@ def execute_exp(config: "DictConfig", run_type: str) -> None:
     random.seed(config.habitat.seed)
     np.random.seed(config.habitat.seed)
     torch.manual_seed(config.habitat.seed)
-
     if (
         config.habitat_baselines.force_torch_single_threaded
         and torch.cuda.is_available()

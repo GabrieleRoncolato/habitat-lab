@@ -68,7 +68,6 @@ from habitat_baselines.utils.timing import g_timer
 
 import wandb
 
-
 @baseline_registry.register_trainer(name="ddppo")
 @baseline_registry.register_trainer(name="ppo")
 class PPOTrainer(BaseRLTrainer):
@@ -190,10 +189,12 @@ class PPOTrainer(BaseRLTrainer):
 
         self._add_preemption_signal_handlers()
 
+        test_rank = 0
         if self._is_distributed:
             local_rank, tcp_store = init_distrib_slurm(
                 self.config.habitat_baselines.rl.ddppo.distrib_backend
             )
+            test_rank = local_rank
             if rank0_only():
                 logger.info(
                     "Initialized DD-PPO with {} workers".format(
@@ -247,6 +248,7 @@ class PPOTrainer(BaseRLTrainer):
         self._init_envs()
 
         self.device = get_device(self.config)
+        logger.info(self.device)
 
         if rank0_only() and not os.path.isdir(
             self.config.habitat_baselines.checkpoint_folder
@@ -256,17 +258,27 @@ class PPOTrainer(BaseRLTrainer):
         logger.add_filehandler(self.config.habitat_baselines.log_file)
 
         self._agent = self._create_agent(resume_state)
+        logger.info("Agents created")
         if self._is_distributed:
             self._agent.init_distributed(find_unused_params=False)  # type: ignore
+
+        logger.info(f"Current rank: {test_rank}")
+
         self._agent.post_init()
+
+        logger.info("Init distributed successful")
 
         self._is_static_encoder = (
             not self.config.habitat_baselines.rl.ddppo.train_encoder
         )
         self._ppo_cfg = self.config.habitat_baselines.rl.ppo
 
+        logger.info("Before reset env")
+
         observations = self.envs.reset()
+        logger.info("After first reset env")
         observations = self.envs.post_step(observations)
+        logger.info("After post step")
         batch = batch_obs(observations, device=self.device)
         batch = apply_obs_transforms_batch(batch, self.obs_transforms)  # type: ignore
 
@@ -293,15 +305,16 @@ class PPOTrainer(BaseRLTrainer):
 
         if rank0_only():
             wandb.init(
-              name="First ViT training",
+              name="CLIPViT RGB resized 2",
               project="Habitat-Robustness",
-              entity="lmarza-gronco",
+              entity="roncolatogabriele",
               mode="online",
               save_code=False,
               config=None,
-              id="ViTTraining1",
+              id="CLIPViT2",
               resume=resume_state is not None
             )
+
 
         self.t_start = time.time()
 
@@ -642,7 +655,6 @@ class PPOTrainer(BaseRLTrainer):
             logger.info(
                 f"Num updates: {self.num_updates_done}\tNum frames {self.num_steps_done}"
             )
-
             logger.info(
                 "Average window size: {}  {}".format(
                     len(self.window_episode_stats["count"]),

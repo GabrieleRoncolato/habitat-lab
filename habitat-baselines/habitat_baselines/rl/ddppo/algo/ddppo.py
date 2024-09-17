@@ -124,7 +124,9 @@ class DecentralizedDistributedMixin:
         # so they don't show up in the state_dict
         class Guard:  # noqa: SIM119
             def __init__(self, model, device):
+                print("Creating guard")
                 if device.type == "cuda":
+                    print("Cuda device")
                     self.ddp = torch.nn.parallel.DistributedDataParallel(  # type: ignore
                         model,
                         device_ids=[device],
@@ -132,10 +134,12 @@ class DecentralizedDistributedMixin:
                         find_unused_parameters=find_unused_params,
                     )
                 else:
+                    print("No cuda")
                     self.ddp = torch.nn.parallel.DistributedDataParallel(  # type: ignore
                         model,
                         find_unused_parameters=find_unused_params,
                     )
+                print("Guard created")
 
         self._evaluate_actions_wrapper = Guard(_EvalActionsWrapper(self.actor_critic), self.device)  # type: ignore
 
