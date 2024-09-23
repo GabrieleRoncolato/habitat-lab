@@ -329,6 +329,9 @@ class NetPolicy(nn.Module, Policy):
         masks,
         deterministic=False,
     ):
+        print(observations)
+        print(rnn_hidden_states)
+        print(prev_actions)
         features, rnn_hidden_states, _ = self.net(
             observations, rnn_hidden_states, prev_actions, masks
         )
